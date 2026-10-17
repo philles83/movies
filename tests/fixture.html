@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <title>Streaming Browser · lokale Funktionsprüfung</title>
+  <script src="/test-bundle.js"></script>
+  <script>window.earlyPopupResult = window.open('https://blocked.invalid/?private=early');</script>
+  <style>
+    body { margin: 50px; background: #131817; color: #f5f3eb; font: 22px/1.5 sans-serif; }
+    h1 { font-size: 36px; font-weight: 500; } h2 { font-size: 24px; }
+    .row { display: flex; gap: 32px; margin: 32px 0; }
+    button, input, a, [role=button] { padding: 18px; font: inherit; background: #28332e; color: white; border: 2px solid #66766d; }
+    .protected-player { margin: 20px 0; border: 2px solid #7a975f; padding: 16px; }
+    video { display: block; width: 260px; height: 120px; }
+    iframe { width: 340px; height: 120px; }
+    [data-test-ad], [data-test-overlay] { background: #a13729; padding: 16px; }
+  </style>
+</head>
+<body>
+  <h1>STREAM / Lokale Funktionsprüfung</h1>
+  <p>Keine echten Streams. Pfeile · Enter · Escape als lokale Zurück-Taste.</p>
+  <div class="row">
+    <button id="one" onclick="window.activations=(window.activations||0)+1">Auswahl 1</button>
+    <button id="two">Auswahl 2</button>
+    <button id="three">Auswahl 3</button>
+  </div>
+  <div class="row">
+    <input id="search" aria-label="Suche" placeholder="Texteingabe bleibt bedienbar">
+    <div id="custom" role="button" onclick="window.customActivations=(window.customActivations||0)+1">Custom Button</div>
+  </div>
+  <div data-test-ad id="static-ad">Testwerbung – wird entfernt</div>
+  <div id="legitimate-overlay" role="dialog">Legitimer Dialog – bleibt erhalten</div>
+  <section class="protected-player" data-test-ad id="player">
+    <h2>Geschützter Player</h2>
+    <video id="video" controls></video>
+    <button id="player-control" data-test-ad>Erforderliches Bedienelement</button>
+  </section>
+  <div data-test-ad id="iframe-wrapper"><iframe id="same-frame" title="Same-origin-Test" src="/frame"></iframe></div>
+  <iframe id="foreign-frame" title="Cross-origin-Test" src="http://127.0.0.1:PORT/frame"></iframe>
+  <div class="row">
+    <a id="internal" href="/next" target="_blank">Interner Seitenwechsel</a>
+    <a id="external" href="https://blocked.invalid/?token=private" target="_blank">Gesperrtes Ziel</a>
+    <a id="deceptive" href="http://localhost.evil.invalid/">Ähnlicher Host</a>
+    <a id="unsafe" href="javascript:window.unsafeRan=true">Unsicheres Protokoll</a>
+  </div>
+  <div id="changed">Später geändertes Element</div>
+</body>
+</html>

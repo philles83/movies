@@ -1,0 +1,501 @@
+'use strict';
+
+// Wird als eigenständige Funktion serialisiert: keine Imports im TV-Kontext.
+module.exports = function streamingBrowser(config, css) {
+  'use strict';
+  var marker = '__TB_STREAM_BROWSER__';
+  var start = new URL(config.websiteURL);
+  var hosts = [start.hostname].concat(config.navigation.allowedHosts);
+  // TizenBrew kann auch Launcher- und Frame-Kontexte injizieren.
+  if (window !== window.top || hosts.indexOf(location.hostname) === -1 || window[marker]) return;
+
+  var state = { version: '1', ready: false, counts: {
+    removed: 0, popupBlocked: 0, navigationBlocked: 0, errors: 0, passes: 0
+  } };
+  window[marker] = state;
+  var entries = [];
+  var ui = null;
+  var panel = null;
+  var hud = null;
+  var launcher = null;
+  var status = null;
+  var previousFocus = null;
+  var observer = null;
+  var scheduled = null;
+  var pending = [];
+  var queued = new WeakSet();
+  var stopping = false;
+  var highlighted = null;
+  var enterHandled = false;
+  var listeners = [];
+  var navigationKey = '__tbStreamNavigation';
+  var pendingKey = '__tbStreamPendingDepth';
+  var originalPush = history.pushState;
+  var originalReplace = history.replaceState;
+  var depth = 0;
+
+  function savedDepth(value) {
+    var n = value && value[navigationKey];
+    return typeof n === 'number' && isFinite(n) && n >= 0 ? n : null;
+  }
+
+  function withDepth(value, next) {
+    if (value !== null && (typeof value !== 'object' || Array.isArray(value))) return null;
+    var copy = Object.assign({}, value);
+    copy[navigationKey] = next;
+    return copy;
+  }
+
+  function clearPending() {
+    try { sessionStorage.removeItem(pendingKey); } catch (_) { /* Speicher optional */ }
+  }
+
+  // Nur ein Zähler in history.state/sessionStorage; keine URLs oder Seiteninhalte.
+  try {
+    var existingDepth = savedDepth(history.state);
+    var pendingDepth = Number(sessionStorage.getItem(pendingKey));
+    var sameReferrer = document.referrer && new URL(document.referrer).origin === location.origin;
+    depth = existingDepth !== null ? existingDepth : sameReferrer && pendingDepth > 0 ? pendingDepth : 0;
+  } catch (_) { depth = 0; }
+  clearPending();
+  if (config.remote.enabled) try {
+    var initialState = withDepth(history.state, depth);
+    if (initialState) originalReplace.call(history, initialState, '');
+  } catch (_) { depth = 0; }
+
+  function pushState(value, title, url) {
+    var copy = withDepth(value, depth + 1);
+    var result = originalPush.call(history, copy || value, title, url);
+    depth = copy ? depth + 1 : 0;
+    clearPending();
+    return result;
+  }
+  function replaceState(value, title, url) {
+    return originalReplace.call(history, withDepth(value, depth) || value, title, url);
+  }
+  if (config.remote.enabled) {
+    try { history.pushState = pushState; history.replaceState = replaceState; } catch (_) { depth = 0; }
+    listen(window, 'popstate', function (event) { depth = savedDepth(event.state) || 0; clearPending(); });
+  }
+
+  function listen(target, type, fn, capture) {
+    target.addEventListener(type, fn, !!capture);
+    listeners.push([target, type, fn, !!capture]);
+  }
+
+  function updateHud() {
+    if (!hud || hud.hidden) return;
+    hud.textContent = 'STREAM / Injection ' + (state.ready ? 'OK' : 'Start') +
+      '\nEntfernt ' + state.counts.removed + ' | Pop-ups ' + state.counts.popupBlocked +
+      '\nNavigation ' + state.counts.navigationBlocked + ' | Fehler ' + state.counts.errors +
+      '\n' + entries.slice(-5).join('\n');
+  }
+
+  // Nur intern erzeugte Kategorien und Regellisten-Indizes; niemals Webseitenwerte.
+  function log(category, rule) {
+    if (!config.debug.enabled) return;
+    var message = category + (typeof rule === 'number' ? ' [Regel ' + rule + ']' : '');
+    entries.push(message);
+    if (entries.length > config.debug.maxEntries) entries.shift();
+    console.info('[Streaming Browser] ' + message);
+    updateHud();
+  }
+
+  function fail(category) {
+    state.counts.errors++;
+    log(category);
+  }
+
+  if (config.debug.enabled) {
+    listen(window, 'error', function () { fail('javascript-error'); });
+    listen(window, 'unhandledrejection', function () { fail('promise-error'); });
+  }
+
+  var originalOpen = window.open;
+  function blockedOpen() {
+    state.counts.popupBlocked++;
+    log('popup-blocked');
+    return null;
+  }
+  if (config.navigation.blockPopups) {
+    try {
+      window.open = blockedOpen;
+      if (window.open !== blockedOpen) fail('popup-hook-unavailable');
+    } catch (_) { fail('popup-hook-unavailable'); }
+  }
+
+  function allowed(raw) {
+    try {
+      var url = new URL(raw, document.baseURI);
+      return (url.protocol === 'https:' || url.protocol === 'http:') &&
+        !url.username && !url.password && hosts.indexOf(url.hostname) !== -1;
+    } catch (_) { return false; }
+  }
+
+  function own(node) {
+    return !!(ui && (node === ui || ui.contains(node)));
+  }
+
+  function findLink(node) {
+    while (node && node !== document) {
+      if (node.nodeType === 1 && /^(A|AREA)$/.test(node.tagName) && node.hasAttribute('href')) return node;
+      node = node.parentNode;
+    }
+    return null;
+  }
+
+  function stop(event) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }
+
+  function guardLink(event) {
+    var link = findLink(event.target);
+    if (!link || own(link)) return;
+    if (!allowed(link.getAttribute('href'))) {
+      stop(event);
+      state.counts.navigationBlocked++;
+      log('navigation-blocked');
+      return;
+    }
+    // Auch <base target> und benannte Frames nicht übernehmen.
+    link.setAttribute('target', '_self');
+    link.removeAttribute('download');
+    if (config.remote.enabled) {
+      try {
+        if (new URL(link.href).origin === location.origin) sessionStorage.setItem(pendingKey, String(depth + 1));
+      } catch (_) { /* Navigation funktioniert auch ohne verfügbaren Speicher. */ }
+    }
+    if (event.type === 'auxclick' || event.ctrlKey || event.metaKey || event.shiftKey) {
+      stop(event);
+      if (event.type !== 'auxclick' || event.button === 1) location.assign(link.href);
+    }
+  }
+  if (config.navigation.guardLinks) {
+    listen(window, 'click', guardLink, true);
+    listen(window, 'auxclick', guardLink, true);
+  }
+
+  function selectors(list, category) {
+    return list.filter(function (selector, index) {
+      try { document.querySelector(selector); return true; }
+      catch (_) { log(category, index); return false; }
+    });
+  }
+  var adRules = selectors(config.filters.adSelectors.concat(config.filters.overlaySelectors), 'invalid-ad-selector');
+  // Die elementaren Medienregeln können nicht versehentlich auskonfiguriert werden.
+  var protectedRules = selectors(['video', 'audio', 'iframe', 'object', 'embed']
+    .concat(config.filters.protectedSelectors), 'invalid-protected-selector');
+  var protectedQuery = protectedRules.join(',');
+
+  function protectedAncestor(node) {
+    while (node && node.nodeType === 1) {
+      if (node.matches(protectedQuery)) return true;
+      node = node.parentElement;
+    }
+    return false;
+  }
+
+  function removeIfAd(node) {
+    // Strukturelle Wurzeln und eigene UI niemals entfernen.
+    if (/^(HTML|HEAD|BODY)$/.test(node.tagName) || own(node)) return false;
+    for (var i = 0; i < adRules.length; i++) {
+      if (node.matches(adRules[i])) {
+        if (protectedAncestor(node) || node.querySelector(protectedQuery) ||
+            (ui && node.contains(ui))) return false;
+        if (node.parentNode) {
+          node.parentNode.removeChild(node);
+          state.counts.removed++;
+          log('element-removed', i);
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  function schedule() {
+    if (!stopping && scheduled === null && pending.length) {
+      scheduled = setTimeout(flush, config.filters.batchDelayMs);
+    }
+  }
+
+  function enqueue(node) {
+    if (!node || node.nodeType !== 1 || own(node) || queued.has(node)) return;
+    // Bei massiven Einfügungen zusammenfassen, statt unbegrenzt Referenzen zu halten.
+    if (pending.length >= 512) {
+      pending = [];
+      queued = new WeakSet();
+      node = document.documentElement;
+    }
+    queued.add(node);
+    pending.push({ root: node, stack: [node] });
+    schedule();
+  }
+
+  function flush() {
+    scheduled = null;
+    if (stopping) return;
+    state.counts.passes++;
+    var remaining = config.filters.maxNodesPerPass;
+    while (remaining-- > 0 && pending.length) {
+      var task = pending[0];
+      var node = task.stack.pop();
+      if (node && node.isConnected && !own(node)) {
+        // Geschwister vor einer möglichen Entfernung sichern; Wurzel nicht verlassen.
+        if (node !== task.root && node.nextElementSibling) task.stack.push(node.nextElementSibling);
+        var skip = protectedAncestor(node);
+        if (!skip && !removeIfAd(node) && node.firstElementChild) task.stack.push(node.firstElementChild);
+      }
+      if (!task.stack.length) {
+        queued.delete(task.root);
+        pending.shift();
+      }
+    }
+    schedule();
+  }
+
+  function startFiltering() {
+    if (!config.filters.enabled || !adRules.length) return;
+    enqueue(document.documentElement);
+    observer = new MutationObserver(function (records) {
+      records.forEach(function (record) {
+        if (own(record.target)) return;
+        if (record.type === 'attributes') {
+          if (record.attributeName !== 'data-tb-stream-focus') enqueue(record.target);
+        }
+        else {
+          for (var i = 0; i < record.addedNodes.length; i++) enqueue(record.addedNodes[i]);
+        }
+      });
+    });
+    observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true });
+  }
+
+  var focusQuery = 'a[href],area[href],button,input,select,textarea,[tabindex],[role="button"],[role="link"],video[controls],iframe';
+  function visible(node) {
+    if (!node || !node.isConnected || node.disabled || node.hidden ||
+        node.getAttribute('aria-disabled') === 'true' || node.closest('[hidden],[inert],[aria-hidden="true"]')) return false;
+    var style = getComputedStyle(node);
+    var rect = node.getBoundingClientRect();
+    return style.visibility !== 'hidden' && style.display !== 'none' &&
+      rect.width > 0 && rect.height > 0 && node.getClientRects().length > 0;
+  }
+
+  function focus(node) {
+    if (!visible(node)) return;
+    if (highlighted) highlighted.removeAttribute('data-tb-stream-focus');
+    if (node.tabIndex < 0) node.setAttribute('tabindex', '0');
+    node.focus();
+    if (document.activeElement !== node) {
+      node.setAttribute('tabindex', '0');
+      node.focus();
+    }
+    highlighted = node;
+    node.setAttribute('data-tb-stream-focus', '');
+    node.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
+
+  function candidates() {
+    var root = panel && !panel.hidden ? panel : document;
+    return Array.prototype.filter.call(root.querySelectorAll(focusQuery), function (node) {
+      return node.getAttribute('tabindex') !== '-1' && visible(node);
+    });
+  }
+
+  function move(key) {
+    var nodes = candidates();
+    var current = document.activeElement;
+    if (!current || current === document.body || nodes.indexOf(current) === -1) {
+      focus(nodes[0]);
+      return;
+    }
+    var from = current.getBoundingClientRect();
+    var x = from.left + from.width / 2;
+    var y = from.top + from.height / 2;
+    var best = null;
+    var bestScore = Infinity;
+    nodes.forEach(function (node) {
+      if (node === current) return;
+      var rect = node.getBoundingClientRect();
+      var dx = rect.left + rect.width / 2 - x;
+      var dy = rect.top + rect.height / 2 - y;
+      var primary = key === 37 ? -dx : key === 39 ? dx : key === 38 ? -dy : dy;
+      var secondary = key === 37 || key === 39 ? Math.abs(dy) : Math.abs(dx);
+      var score = primary + secondary * 3;
+      if (primary > 1 && score < bestScore) { best = node; bestScore = score; }
+    });
+    if (best) focus(best);
+    else if (!panel || panel.hidden) {
+      window.scrollBy(key === 37 ? -config.remote.scrollStep : key === 39 ? config.remote.scrollStep : 0,
+        key === 38 ? -config.remote.scrollStep : key === 40 ? config.remote.scrollStep : 0);
+    }
+  }
+
+  function editable(node) {
+    return node && (node.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(node.tagName));
+  }
+
+  function fullscreenElement() {
+    return document.fullscreenElement || document.webkitFullscreenElement;
+  }
+
+  function fullscreenExit() {
+    var exit = document.exitFullscreen || document.webkitExitFullscreen;
+    if (!exit) return false;
+    try {
+      var result = exit.call(document);
+      if (result && result.catch) result.catch(function () { fail('fullscreen-exit-denied'); });
+      return true;
+    } catch (_) { fail('fullscreen-exit-denied'); return false; }
+  }
+
+  function notify(message) { if (status) status.textContent = message; }
+  function requestFullscreen() {
+    if (fullscreenElement()) { fullscreenExit(); return; }
+    var target = previousFocus;
+    if (!target || !target.isConnected || !protectedAncestor(target)) {
+      target = Array.prototype.find.call(document.querySelectorAll(protectedQuery), visible);
+    }
+    // Bei einem iframe ausschließlich dessen äußeres Element verwenden.
+    target = target || document.documentElement;
+    var request = target.requestFullscreen || target.webkitRequestFullscreen;
+    if (!request) { notify('Vollbild nicht verfügbar'); log('fullscreen-unavailable'); return; }
+    try {
+      var result = request.call(target);
+      if (result && result.catch) result.catch(function () {
+        notify('Vollbild vom Player abgelehnt'); fail('fullscreen-denied');
+      });
+      closePanel();
+    } catch (_) { notify('Vollbild nicht verfügbar'); fail('fullscreen-denied'); }
+  }
+
+  function closePanel() {
+    if (!panel) return;
+    panel.hidden = true;
+    launcher.setAttribute('aria-expanded', 'false');
+    focus(launcher);
+  }
+
+  function keydown(event) {
+    var key = event.keyCode || ({ ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39,
+      ArrowDown: 40, Enter: 13, Escape: 27, BrowserBack: 10009 }[event.key]);
+    var active = document.activeElement;
+    if (key === 13 && enterHandled && event.repeat) { stop(event); return; }
+    if (key === 10009 || key === 27) {
+      if (editable(active)) return;
+      if (panel && !panel.hidden) { stop(event); closePanel(); }
+      else if (fullscreenElement()) { if (fullscreenExit()) stop(event); }
+      else if (depth > 0) { stop(event); history.back(); }
+      // Am Einstieg kein preventDefault: TizenBrew behält seine Zurück-Funktion.
+      return;
+    }
+    if (editable(active) || (!own(active) && protectedAncestor(active))) return;
+    if (key >= 37 && key <= 40) { stop(event); move(key); }
+    else if (key === 13 && visible(active) && active.matches(focusQuery)) {
+      stop(event);
+      if (!event.repeat) { enterHandled = true; active.click(); }
+    }
+  }
+
+  function createUI() {
+    var style = document.createElement('style');
+    style.id = 'tb-stream-style';
+    style.textContent = css;
+    (document.head || document.documentElement).appendChild(style);
+    ui = document.createElement('div');
+    ui.id = 'tb-stream-ui';
+    panel = document.createElement('div');
+    panel.setAttribute('data-panel', '');
+    panel.id = 'tb-stream-panel';
+    panel.hidden = true;
+    panel.setAttribute('role', 'group');
+    panel.setAttribute('aria-label', 'Streaming Browser');
+    var title = document.createElement('span');
+    title.setAttribute('data-title', '');
+    title.textContent = 'STREAM / TV';
+    panel.appendChild(title);
+
+    function button(label, handler) {
+      var node = document.createElement('button');
+      node.type = 'button';
+      node.textContent = label;
+      listen(node, 'click', handler);
+      panel.appendChild(node);
+      return node;
+    }
+    button('Startseite', function () { location.assign(config.websiteURL); });
+    button('Vollbild', requestFullscreen);
+    if (config.debug.enabled) button('Debug-Anzeige', function () {
+      hud.hidden = !hud.hidden;
+      updateHud();
+    });
+    button('Schließen', closePanel);
+    status = document.createElement('span');
+    status.setAttribute('data-status', '');
+    status.setAttribute('role', 'status');
+    panel.appendChild(status);
+    ui.appendChild(panel);
+    launcher = document.createElement('button');
+    launcher.type = 'button';
+    launcher.textContent = 'TV-Menü';
+    launcher.setAttribute('aria-expanded', 'false');
+    launcher.setAttribute('aria-controls', panel.id);
+    listen(launcher, 'click', function () {
+      if (!panel.hidden) { closePanel(); return; }
+      previousFocus = highlighted && !own(highlighted) ? highlighted : null;
+      panel.hidden = false;
+      launcher.setAttribute('aria-expanded', 'true');
+      focus(panel.querySelector('button'));
+    });
+    ui.appendChild(launcher);
+    if (config.debug.enabled) {
+      hud = document.createElement('div');
+      hud.setAttribute('data-debug', '');
+      hud.hidden = !config.debug.showOverlay;
+      ui.appendChild(hud);
+    }
+    document.body.appendChild(ui);
+  }
+
+  function ready() {
+    if (stopping || state.ready) return;
+    if (config.remote.enabled || config.debug.enabled) createUI();
+    if (config.remote.enabled) {
+      listen(window, 'keydown', keydown, true);
+      listen(window, 'keyup', function (event) {
+        if ((event.keyCode === 13 || event.key === 'Enter') && enterHandled) {
+          enterHandled = false;
+          stop(event);
+        }
+      }, true);
+      listen(window, 'keypress', function (event) {
+        if ((event.keyCode === 13 || event.key === 'Enter') && enterHandled) stop(event);
+      }, true);
+      listen(window, 'blur', function () { enterHandled = false; });
+    }
+    startFiltering();
+    state.ready = true;
+    log('injection-ready');
+  }
+
+  // Expliziter Cleanup für Tests und Diagnose; keine Webseite-Inhalte zugänglich machen.
+  state.destroy = function () {
+    stopping = true;
+    if (observer) observer.disconnect();
+    if (scheduled !== null) clearTimeout(scheduled);
+    pending = [];
+    listeners.forEach(function (entry) { entry[0].removeEventListener(entry[1], entry[2], entry[3]); });
+    if (window.open === blockedOpen) window.open = originalOpen;
+    if (history.pushState === pushState) history.pushState = originalPush;
+    if (history.replaceState === replaceState) history.replaceState = originalReplace;
+    if (highlighted) highlighted.removeAttribute('data-tb-stream-focus');
+    if (ui) ui.remove();
+    var style = document.getElementById('tb-stream-style');
+    if (style) style.remove();
+    delete window[marker];
+  };
+
+  if (document.readyState === 'loading') listen(document, 'DOMContentLoaded', ready);
+  else ready();
+};
