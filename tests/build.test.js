@@ -10,7 +10,8 @@ test('Das ausgelieferte TizenBrew-Modul ist konsistent und eigenständig', () =>
   assert.equal(manifest.packageType, 'mods');
   assert.equal(manifest.main, 'main.js');
   assert.equal(manifest.websiteURL, config.websiteURL);
-  assert.equal(manifest.evaluateScriptOnDocumentStart, true);
+  // true verhindert im untersuchten TizenBrew-Handshake den direkten Seitenwechsel.
+  assert.equal(manifest.evaluateScriptOnDocumentStart, false);
   const bundle = fs.readFileSync(require.resolve('../main.js'), 'utf8');
   assert.equal(bundle, render(config));
   assert.doesNotMatch(bundle, /require\(|module\.exports|import\s/);

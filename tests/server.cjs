@@ -28,7 +28,12 @@ async function start(port = 0) {
       res.end('<!doctype html><html lang="de"><title>Frame</title><body><button id="frame-button">Frame-Steuerung</button></body></html>');
     } else {
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      res.end(fs.readFileSync(path.join(__dirname, 'fixture.html'), 'utf8').replaceAll('PORT', actualPort));
+      let fixture = fs.readFileSync(path.join(__dirname, 'fixture.html'), 'utf8').replaceAll('PORT', actualPort);
+      if (req.url === '/late') {
+        fixture = fixture.replace('<script src="/test-bundle.js"></script>', '')
+          .replace(/<script>window\.earlyPopupResult[^<]*<\/script>/, '');
+      }
+      res.end(fixture);
     }
   });
   await new Promise(resolve => server.listen(port, '127.0.0.1', resolve));

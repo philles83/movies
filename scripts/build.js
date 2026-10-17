@@ -51,7 +51,7 @@ function build(check) {
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
   const expected = { ...manifest, websiteURL: config.websiteURL };
   if (manifest.packageType !== 'mods' || manifest.main !== 'main.js' ||
-      manifest.evaluateScriptOnDocumentStart !== true || !Array.isArray(manifest.keys)) {
+      manifest.evaluateScriptOnDocumentStart !== false || !Array.isArray(manifest.keys)) {
     throw new Error('TizenBrew-Paketfelder sind inkonsistent.');
   }
   if (check) {

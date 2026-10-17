@@ -205,6 +205,18 @@ const production = require('../config.js');
       assert.equal(await page.evaluate(() => window.__TB_STREAM_BROWSER__.counts.passes), 0);
       await page.evaluate(() => window.__TB_STREAM_BROWSER__.destroy());
     });
+    await check('Normaler Injection-Pfad funktioniert auch nach vollständigem Seitenaufbau', async () => {
+      await page.goto(local.url + 'late');
+      assert.equal(await page.evaluate(() => !!window.__TB_STREAM_BROWSER__), false);
+      assert.equal(await page.locator('#static-ad').count(), 1);
+      await page.addScriptTag({ content: render(testConfig(local.port)) });
+      await page.waitForFunction(() => window.__TB_STREAM_BROWSER__?.ready && !document.querySelector('#static-ad'));
+      assert.equal(await page.locator('#tb-stream-ui > button').isVisible(), true);
+      assert.equal(await page.evaluate(() => window.open('https://blocked.invalid/')), null);
+      await page.locator('#one').focus();
+      await page.keyboard.press('ArrowRight');
+      assert.equal(await page.locator(':focus').getAttribute('id'), 'two');
+    });
     console.log(`${checks} Browser-Szenarien bestanden.`);
   } finally {
     if (browser) await browser.close();

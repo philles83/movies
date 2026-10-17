@@ -1,12 +1,12 @@
 {
   "name": "tizenbrew-streaming-browser",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Gezielte Website-Modifikationen und TV-Fokusnavigation für 67movies.st",
   "appName": "Streaming Browser",
   "packageType": "mods",
   "websiteURL": "https://67movies.st/",
   "main": "main.js",
-  "evaluateScriptOnDocumentStart": true,
+  "evaluateScriptOnDocumentStart": false,
   "keys": [],
   "scripts": {
     "build": "node scripts/build.js",

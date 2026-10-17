@@ -1,6 +1,6 @@
 # TizenBrew Streaming Browser
 
-Ein kleines **Site Modification Module** für `https://67movies.st/`: frühe Popup-Sperre, gezielte DOM-Filter und Fokusnavigation mit der Samsung-TV-Fernbedienung. Zielgerät ist ein Samsung-TV von 2022; die tatsächliche Firmware, Tizen-Version und Player-Kompatibilität müssen auf diesem Gerät geprüft werden.
+Ein kleines **Site Modification Module** für `https://67movies.st/`: Popup-Sperre ab Injection, gezielte DOM-Filter und Fokusnavigation mit der Samsung-TV-Fernbedienung. Zielgerät ist ein Samsung-TV von 2022; die tatsächliche Firmware, Tizen-Version und Player-Kompatibilität müssen auf diesem Gerät geprüft werden.
 
 **Status:** Prototyp. Das fertige `main.js` liegt im Repository. Die lokale Simulation prüft Modulverhalten, ersetzt aber keine TV-Abnahme. GitHub-Veröffentlichung und Installation auf einem Fernseher erfolgen nicht automatisch.
 
@@ -17,6 +17,8 @@ tests/                Lokale Fixtures und automatisierte Prüfungen
 ```
 
 Das Modul verwendet `packageType: "mods"`, `appName`, `websiteURL`, `main`, `keys` und `evaluateScriptOnDocumentStart`. TizenBrew lädt genau die Datei aus `main`; es lädt **nicht** automatisch `config.js`, CSS-Dateien oder CommonJS-Imports nach. Deshalb bindet der Build Konfiguration und CSS in `main.js` ein. Es gibt keine Laufzeitabhängigkeiten und keinen `serviceFile`.
+
+**Startkorrektur in 0.1.1:** `evaluateScriptOnDocumentStart` ist ausdrücklich `false`. Im untersuchten TizenBrew-Code wartet die Oberfläche bei `true` auf ein Startsignal. Der Service sendet dabei `mdl.name`, die Oberfläche sucht jedoch nach `fullName`; außerdem wird die Signalübermittlung erst bei einem neuen Ausführungskontext angestoßen. Der normale Pfad wechselt direkt zur Zieladresse und verwendet die reguläre Injection. Die Popup-Sperre gilt deshalb erst ab der tatsächlichen Injection; vorher ausgeführter Code kann nicht rückwirkend blockiert werden. Quellen: [Startaktion](https://github.com/reisxd/TizenBrew/blob/main/tizenbrew-app/TizenBrew/tizenbrew-ui/src/components/Modules.jsx), [Empfänger](https://github.com/reisxd/TizenBrew/blob/main/tizenbrew-app/TizenBrew/tizenbrew-ui/src/components/WebSocketClient.js), [Service](https://github.com/reisxd/TizenBrew/blob/main/tizenbrew-app/TizenBrew/service-nextgen/service/utils/debugger.js).
 
 `keys` ist leer: Pfeile, Enter und Zurück benötigen keine zusätzliche Registrierung. Es werden keine nicht dokumentierten TizenBrew-JavaScript-APIs aufgerufen. DOM und Browser-APIs werden direkt verwendet; Vollbild wird auf Verfügbarkeit geprüft.
 
@@ -116,7 +118,7 @@ npm run test:serve
 
 Dann `http://localhost:8787/` öffnen. Die Simulation verwendet automatisch eine lokale Ziel-URL und zusätzliche Testselektoren; die Produktionskonfiguration bleibt unverändert. Der zweite Frame nutzt `127.0.0.1` als andere Origin. Beenden mit Ctrl+C.
 
-Geprüfte Szenarien: frühe Popup-Sperre, Mehrfach-Injection, statische/dynamische Werbung, Attributänderungen, Player-/Iframe-Schutz, legitime Dialoge, ungültige Selektoren, Mutation-Sturm und Ruhe danach, erlaubte/gesperrte Links, Fokus/Enter/Formulare, Menü/Zurück, Vollbild-Ablehnung, SPA- und Dokument-History, datensparsame Fehlerlogs und Produktionsmodus. Ein lokaler Screenshot wird unter `test-results/fixture-tv.png` erzeugt.
+Geprüfte Szenarien: Popup-Sperre ab Injection, Mehrfach-Injection, statische/dynamische Werbung, Attributänderungen, Player-/Iframe-Schutz, legitime Dialoge, ungültige Selektoren, Mutation-Sturm und Ruhe danach, erlaubte/gesperrte Links, Fokus/Enter/Formulare, Menü/Zurück, Vollbild-Ablehnung, SPA- und Dokument-History, datensparsame Fehlerlogs und Produktionsmodus. Ein lokaler Screenshot wird unter `test-results/fixture-tv.png` erzeugt.
 
 Eine erfolgreiche lokale Prüfung beweist weder TizenBrew-Erkennung noch TV-Injection, Streaming-Wiedergabe oder Fernbedienungsereignisse aus fremden Iframes.
 
@@ -138,21 +140,21 @@ Die manuelle Alternative über Tizen Studio, SDB und signiertes WGT ist in der o
 1. Ein öffentliches GitHub-Repository anlegen, beispielsweise `OWNER/tizenbrew-streaming-browser`.
 2. Konfiguration prüfen, `npm run build`, `npm test` und `npm run check` ausführen.
 3. Die Projektdateien einschließlich **Root-`package.json` und `main.js`** committen und pushen. `node_modules/` und `test-results/` werden ausgeschlossen. GitHub Pages und npm-Publishing sind nicht erforderlich.
-4. Für die Paketversion `0.1.0` einen unveränderlichen Git-Tag `v0.1.0` auf dem geprüften Commit erstellen und pushen:
+4. Für die Paketversion `0.1.1` einen unveränderlichen Git-Tag `v0.1.1` auf dem geprüften Commit erstellen und pushen:
 
    ```sh
-   git tag v0.1.0
-   git push origin v0.1.0
+   git tag v0.1.1
+   git push origin v0.1.1
    ```
 
 5. Die öffentlich abrufbaren CDN-Dateien kontrollieren; `OWNER` und `REPO` ersetzen:
 
    ```text
-   https://cdn.jsdelivr.net/gh/OWNER/REPO@v0.1.0/package.json
-   https://cdn.jsdelivr.net/gh/OWNER/REPO@v0.1.0/main.js
+   https://cdn.jsdelivr.net/gh/OWNER/REPO@v0.1.1/package.json
+   https://cdn.jsdelivr.net/gh/OWNER/REPO@v0.1.1/main.js
    ```
 
-6. In TizenBrew **Modulverwaltung → GitHub-Modul hinzufügen** öffnen. Als Kennung `OWNER/REPO@v0.1.0` eingeben, ohne `gh/` und ohne vollständige URL. Das entspricht dem im aktuellen Loader verwendeten jsDelivr-GitHub-Pfad. Das Modul muss als **Streaming Browser (0.1.0)** erscheinen.
+6. In TizenBrew **Modulverwaltung → GitHub-Modul hinzufügen** öffnen. Als Kennung `OWNER/REPO@v0.1.1` eingeben, ohne `gh/` und ohne vollständige URL. Das entspricht dem im aktuellen Loader verwendeten jsDelivr-GitHub-Pfad. Das Modul muss als **Streaming Browser (0.1.1)** erscheinen.
 7. Zum Dashboard zurückkehren und das Modul starten. TizenBrew öffnet die Website und injiziert `main.js`.
 
 Kennungen ohne Tag (`OWNER/REPO`) sind grundsätzlich möglich, können aber durch CDN-Caches verzögerte Änderungen zeigen. Für nachvollziehbare Tests und Releases getaggte Versionen verwenden. Öffentliche Konfiguration enthält keine Zugangsdaten.
@@ -161,8 +163,8 @@ Kennungen ohne Tag (`OWNER/REPO`) sind grundsätzlich möglich, können aber dur
 
 1. Konfiguration/Quellcode ändern und Versionsnummer in `package.json` erhöhen.
 2. Neu bauen, lokal prüfen und Änderungen einschließlich Bundle und Lockdatei committen.
-3. Neuen Tag, beispielsweise `v0.1.1`, pushen. Bestehende Tags nicht verschieben.
-4. Neue CDN-Dateien prüfen, den neuen Moduleintrag `OWNER/REPO@v0.1.1` hinzufügen und den alten Eintrag nach erfolgreicher Prüfung entfernen. Dies benötigt keine erfundene Update-API.
+3. Neuen Tag, beispielsweise `v0.1.2`, pushen. Bestehende Tags nicht verschieben.
+4. Neue CDN-Dateien prüfen, den neuen Moduleintrag `OWNER/REPO@v0.1.2` hinzufügen und den alten Eintrag nach erfolgreicher Prüfung entfernen. Dies benötigt keine erfundene Update-API.
 5. TizenBrew vollständig beenden und neu starten, damit der pro Modul gehaltene Injection-Cache erneuert wird. Ein Reload der Website allein genügt dafür möglicherweise nicht.
 6. Für einen Rollback den vorherigen Tag erneut als Modul hinzufügen, den fehlerhaften Eintrag entfernen und TizenBrew neu starten.
 
@@ -175,7 +177,7 @@ Das folgende Protokoll vor Ort ausfüllen. **Alle Hardwareprüfungen sind derzei
 | TV-Modell | offen |
 | Firmware / Tizen-Version | offen |
 | TizenBrew-Version | offen |
-| Modulversion / Git-Tag | 0.1.0 / geplanter Tag v0.1.0 |
+| Modulversion / Git-Tag | 0.1.1 / geplanter Tag v0.1.1 |
 | Prüfdatum | offen |
 
 | Priorität | Prüfung | Erfolgskriterium | TV-Status |
@@ -188,6 +190,7 @@ Das folgende Protokoll vor Ort ausfüllen. **Alle Hardwareprüfungen sind derzei
 | 6 | Fernbedienung | Pfeile, einmaliges Enter, Menü, Zurück und Vollbild geprüft | offen |
 
 - **Unknown Module / Modul fehlt:** Repository öffentlich? Tag vorhanden? Root-`package.json` unter der CDN-URL tatsächlich JSON? `packageType`, `main` und `npm run check` prüfen.
+- **Home-Bildschirm bleibt beim Start unverändert:** Mindestens Modulversion 0.1.1 verwenden und im veröffentlichten Paket `evaluateScriptOnDocumentStart: false` prüfen. Alten getaggten Moduleintrag durch den neuen ersetzen; TizenBrew vollständig neu starten.
 - **Website öffnet, aber kein TV-Menü:** Injection-/Debugger-Status in TizenBrew prüfen. Stimmt der aktuelle Host exakt mit der Konfiguration überein? Nach Domainwechsel wird nicht blind auf unbekannte Hosts injiziert. CDN-Bundle und Tag prüfen; TizenBrew neu starten.
 - **Werbung bleibt:** Debug-Version zeigt nur konfigurierte Treffer. Im Inspector gezielte Selektoren bestimmen, Player-Schutz zuerst ergänzen und einzeln prüfen. Skriptentfernung verhindert keine bereits gestartete Werbung; fremde Frames sind ausgenommen.
 - **Player oder notwendiger Link funktioniert nicht:** Zunächst DOM-Filter über `filters.enabled` isolieren. Danach bei Bedarf Linkschutz separat diagnostizieren; ausschließlich geprüfte Zielhosts freigeben. Die Popup-Sperre ist absichtlich streng und kann legitime Popup-Abläufe verhindern.
